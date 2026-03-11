@@ -103,7 +103,7 @@ function connectWebSocket() {
                     "Xuc_xac_3": d3,
                     "Tong": total,
                     "Ket_qua": result,
-                    "id": "@mrtinhios"
+                    "id": "@Cskhtool12"
                 };
                 
                 console.log(`Phiên ${apiResponseData.Phien}: ${apiResponseData.Tong} (${apiResponseData.Ket_qua})`);
