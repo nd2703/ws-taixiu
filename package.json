@@ -1,0 +1,14 @@
+{
+  "name": "ws-taixiu",
+  "version": "1.0.0",
+  "description": "Tai xiu websocket server",
+  "main": "ta28.js",
+  "scripts": {
+    "start": "node ta28.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.13.0",
+    "cors": "^2.8.5"
+  }
+}
