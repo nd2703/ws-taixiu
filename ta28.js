@@ -2,141 +2,372 @@ const WebSocket = require('ws');
 const express = require('express');
 const cors = require('cors');
 
-const app = express();
-app.use(cors());
-const PORT = process.env.PORT || 3001;
-
-let apiResponseData = {
-    "Phien": null,
-    "Xuc_xac_1": null,
-    "Xuc_xac_2": null,
-    "Xuc_xac_3": null,
-    "Tong": null,
-    "Ket_qua": "",
-    "id": "@Cskhtool12"
-};
-
-let currentSessionId = null;
-const patternHistory = [];
-
-const WEBSOCKET_URL = "wss://websocket.azhkthg1.net/websocket?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhbW91bnQiOjAsInVzZXJuYW1lIjoiU0NfYXBpc3Vud2luMTIzIn0.hgrRbSV6vnBwJMg9ZFtbx3rRu9mX_hZMZ_m5gMNhkw0";
-const WS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Origin": "https://play.sun.win"
-};
-const RECONNECT_DELAY = 2500;
-const PING_INTERVAL = 15000;
-
-const initialMessages = [
-    [
-        1,
-        "MiniGame",
-        "GM_apivopnha",
-        "WangLin",
-        {
-            "info": "{\"ipAddress\":\"14.249.227.107\",\"wsToken\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiI5ODE5YW5zc3MiLCJib3QiOjAsImlzTWVyY2hhbnQiOmZhbHNlLCJ2ZXJpZmllZEJhbmtBY2NvdW50IjpmYWxzZSwicGxheUV2ZW50TG9iYnkiOmZhbHNlLCJjdXN0b21lcklkIjozMjMyODExNTEsImFmZklkIjoic3VuLndpbiIsImJhbm5lZCI6ZmFsc2UsImJyYW5kIjoiZ2VtIiwidGltZXN0YW1wIjoxNzYzMDMyOTI4NzcwLCJsb2NrR2FtZXMiOltdLCJhbW91bnQiOjAsImxvY2tDaGF0IjpmYWxzZSwicGhvbmVWZXJpZmllZCI6ZmFsc2UsImlwQWRkcmVzcyI6IjE0LjI0OS4yMjcuMTA3IiwibXV0ZSI6ZmFsc2UsImF2YXRhciI6Imh0dHBzOi8vaW1hZ2VzLnN3aW5zaG9wLm5ldC9pbWFnZXMvYXZhdGFyL2F2YXRhcl8wNS5wbmciLCJwbGF0Zm9ybUlkIjo0LCJ1c2VySWQiOiI4ODM4NTMzZS1kZTQzLTRiOGQtOTUwMy02MjFmNDA1MDUzNGUiLCJyZWdUaW1lIjoxNzYxNjMyMzAwNTc2LCJwaG9uZSI6IiIsImRlcG9zaXQiOmZhbHNlLCJ1c2VybmFtZSI6IkdNX2FwaXZvcG5oYSJ9.guH6ztJSPXUL1cU8QdMz8O1Sdy_SbxjSM-CDzWPTr-0\",\"locale\":\"vi\",\"userId\":\"8838533e-de43-4b8d-9503-621f4050534e\",\"username\":\"GM_apivopnha\",\"timestamp\":1763032928770,\"refreshToken\":\"e576b43a64e84f789548bfc7c4c8d1e5.7d4244a361e345908af95ee2e8ab2895\"}",
-            "signature": "45EF4B318C883862C36E1B189A1DF5465EBB60CB602BA05FAD8FCBFCD6E0DA8CB3CE65333EDD79A2BB4ABFCE326ED5525C7D971D9DEDB5A17A72764287FFE6F62CBC2DF8A04CD8EFF8D0D5AE27046947ADE45E62E644111EFDE96A74FEC635A97861A425FF2B5732D74F41176703CA10CFEED67D0745FF15EAC1065E1C8BCBFA"
-        }
-    ],
-    [6, "MiniGame", "taixiuPlugin", { cmd: 1005 }],
-    [6, "MiniGame", "lobbyPlugin", { cmd: 10001 }]
-];
-
-let ws = null;
-let pingInterval = null;
-let reconnectTimeout = null;
-
-function connectWebSocket() {
-    if (ws) {
-        ws.removeAllListeners();
-        ws.close();
+class GameWebSocketClient {
+    constructor(url) {
+        this.url = url;
+        this.ws = null;
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 5;
+        this.reconnectDelay = 5000;
+        this.isAuthenticated = false;
+        this.sessionId = null;
+        this.latestTxData = null;   // Dữ liệu bàn tài xỉu thường (cmd 1005)
+        this.latestMd5Data = null;  // Dữ liệu bàn MD5 (cmd 1105)
+        this.lastUpdateTime = {
+            tx: null,
+            md5: null
+        };
     }
 
-    ws = new WebSocket(WEBSOCKET_URL, { headers: WS_HEADERS });
-
-    ws.on('open', () => {
-        console.log('[✅] WebSocket connected.');
-        initialMessages.forEach((msg, i) => {
-            setTimeout(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify(msg));
-                }
-            }, i * 600);
+    connect() {
+        console.log('🔗 Connecting to WebSocket server...');
+        
+        this.ws = new WebSocket(this.url, {
+            headers: {
+                'Host': 'api.khuatuish.vip',
+                'Origin': 'https://play.zing88a.vin',
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
+                'Pragma': 'no-cache',
+                'Cache-Control': 'no-cache',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept-Language': 'vi-VN,vi;q=0.9,fr-FR;q=0.8,fr;q=0.7,en-US;q=0.6,en;q=0.5',
+                'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits',
+                'Sec-WebSocket-Version': '13'
+            }
         });
 
-        clearInterval(pingInterval);
-        pingInterval = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.ping();
+        this.setupEventHandlers();
+    }
+
+    setupEventHandlers() {
+        this.ws.on('open', () => {
+            console.log('✅ Connected to WebSocket server');
+            this.reconnectAttempts = 0;
+            this.sendAuthentication();
+        });
+
+        this.ws.on('message', (data) => {
+            this.handleMessage(data);
+        });
+
+        this.ws.on('error', (error) => {
+            console.error('❌ WebSocket error:', error.message);
+        });
+
+        this.ws.on('close', (code, reason) => {
+            console.log(`🔌 Connection closed. Code: ${code}, Reason: ${String(reason)}`);
+            this.isAuthenticated = false;
+            this.sessionId = null;
+            this.handleReconnect();
+        });
+
+        this.ws.on('pong', () => {
+            console.log('❤️  Heartbeat received from server');
+        });
+    }
+
+    sendAuthentication() {
+        console.log('🔐 Sending authentication...');
+        
+        const authMessage = [
+            1,
+            "MiniGame",
+            "apizing88",
+            "WangLin1@",
+            {
+                "signature": "3F4F57DF2E2F45E99EE528257F6F235C30831733BFC66DD9BE33436A3F78D18E5093BB5F8514CA99C245B3F480B092DEF4EA0CF91E7FDA7DF9A2EF2893FDA44D9C169A0167F9E759CC76E9F50CD6345BA99337B7FB43C9183D0C3F96C3CF37CBF477D1D370BE741F2E1039DD544C119B9997552FC7F2F1B18F4E10604B7C19DC",
+                "info": {
+                    "cs": "4369fabdc2860f5e50d66e44ab94b3c0",
+                    "phone": "",
+                    "ipAddress": "113.185.46.68",
+                    "isMerchant": false,
+                    "userId": "03edac1f-20a2-4f00-9dda-8fc8a398c40a",
+                    "deviceId": "050105373613900053736078036024",
+                    "isMktAccount": false,
+                    "username": "apizing88",
+                    "timestamp": 1766556654268
+                },
+                "pid": 4
             }
-        }, PING_INTERVAL);
-    });
+        ];
 
-    ws.on('pong', () => {
-        console.log('[📶] Ping OK.');
-    });
+        this.sendRaw(authMessage);
+    }
 
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
+    sendPluginMessages() {
+        console.log('🚀 Sending plugin initialization messages...');
+        
+        const pluginMessages = [
+            [6,"MiniGame","taixiuPlugin",{"cmd":1005}],
+            [6,"MiniGame","taixiuMd5Plugin",{"cmd":1105}],
+            [6,"MiniGame","lobbyPlugin",{"cmd":10001}],
+            [6,"MiniGame","channelPlugin",{"cmd":310}]
+        ];
 
-            if (!Array.isArray(data) || typeof data[1] !== 'object') {
-                return;
-            }
+        pluginMessages.forEach((message, index) => {
+            setTimeout(() => {
+                console.log(`📤 Sending plugin ${index + 1}/${pluginMessages.length}: ${message[2]}`);
+                this.sendRaw(message);
+            }, index * 1000);
+        });
 
-            const { cmd, sid, d1, d2, d3, gBB } = data[1];
+        // Thiết lập interval để refresh dữ liệu mỗi 30 giây
+        setInterval(() => {
+            this.refreshGameData();
+        }, 30000);
+    }
 
-            if (cmd === 1008 && sid) {
-                currentSessionId = sid;
-            }
-
-            if (cmd === 1003 && gBB) {
-                if (!d1 || !d2 || !d3) return;
-
-                const total = d1 + d2 + d3;
-                const result = (total > 10) ? "Tài" : "Xỉu";
-
-                apiResponseData = {
-                    "Phien": currentSessionId,
-                    "Xuc_xac_1": d1,
-                    "Xuc_xac_2": d2,
-                    "Xuc_xac_3": d3,
-                    "Tong": total,
-                    "Ket_qua": result,
-                    "id": "@Cskhtool12"
-                };
-                
-                console.log(`Phiên ${apiResponseData.Phien}: ${apiResponseData.Tong} (${apiResponseData.Ket_qua})`);
-                
-                currentSessionId = null;
-            }
-        } catch (e) {
-            console.error('[❌] Lỗi xử lý message:', e.message);
+    refreshGameData() {
+        if (this.isAuthenticated && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            console.log('🔄 Refreshing game data...');
+            
+            const refreshTx = [6, "MiniGame", "taixiuPlugin", { "cmd": 1005 }];
+            const refreshMd5 = [6, "MiniGame", "taixiuMd5Plugin", { "cmd": 1105 }];
+            
+            this.sendRaw(refreshTx);
+            setTimeout(() => {
+                this.sendRaw(refreshMd5);
+            }, 1000);
         }
-    });
+    }
 
-    ws.on('close', (code, reason) => {
-        console.log(`[🔌] WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
-        clearInterval(pingInterval);
-        clearTimeout(reconnectTimeout);
-        reconnectTimeout = setTimeout(connectWebSocket, RECONNECT_DELAY);
-    });
+    sendRaw(data) {
+        if (this.ws.readyState === WebSocket.OPEN) {
+            const jsonString = JSON.stringify(data);
+            this.ws.send(jsonString);
+            console.log('📤 Sent raw:', jsonString);
+            return true;
+        } else {
+            console.log('⚠️ Cannot send, WebSocket not open');
+            return false;
+        }
+    }
 
-    ws.on('error', (err) => {
-        console.error('[❌] WebSocket error:', err.message);
-        ws.close();
-    });
+    handleMessage(data) {
+        try {
+            const parsed = JSON.parse(data);
+            
+            // XỬ LÝ CMD 1005 - BÀN TÀI XỈU THƯỜNG
+            if (parsed[0] === 5 && parsed[1] && parsed[1].cmd === 1005) {
+                console.log('🎯 Nhận được dữ liệu cmd 1005 (Bàn TX)');
+                const gameData = parsed[1];
+                if (gameData.htr && gameData.htr.length > 0) {
+                    const latestSession = gameData.htr.reduce((prev, current) => (current.sid > prev.sid) ? current : prev);
+                    console.log(`🎲 Bàn TX - Phiên gần nhất: ${latestSession.sid} (${latestSession.d1},${latestSession.d2},${latestSession.d3})`);
+                    this.latestTxData = gameData;
+                    this.lastUpdateTime.tx = new Date();
+                    console.log('💾 Đã cập nhật dữ liệu bàn TX');
+                }
+            }
+            
+            // XỬ LÝ CMD 1105 - BÀN MD5
+            else if (parsed[0] === 5 && parsed[1] && parsed[1].cmd === 1105) {
+                console.log('🎯 Nhận được dữ liệu cmd 1105 (Bàn MD5)');
+                const gameData = parsed[1];
+                if (gameData.htr && gameData.htr.length > 0) {
+                    const latestSession = gameData.htr.reduce((prev, current) => (current.sid > prev.sid) ? current : prev);
+                    console.log(`🎲 Bàn MD5 - Phiên gần nhất: ${latestSession.sid} (${latestSession.d1},${latestSession.d2},${latestSession.d3})`);
+                    this.latestMd5Data = gameData;
+                    this.lastUpdateTime.md5 = new Date();
+                    console.log('💾 Đã cập nhật dữ liệu bàn MD5');
+                }
+            }
+            
+            // Xử lý response authentication (type 5, có cmd 100)
+            else if (parsed[0] === 5 && parsed[1] && parsed[1].cmd === 100) {
+                console.log('🔑 Authentication successful!');
+                const userData = parsed[1];
+                console.log(`✅ User: ${userData.u}`);
+                this.isAuthenticated = true;
+                setTimeout(() => {
+                    console.log('🔄 Starting to send plugin messages...');
+                    this.sendPluginMessages();
+                }, 2000);
+            }
+            
+            // Xử lý response type 1 - Session initialization
+            else if (parsed[0] === 1 && parsed.length >= 5 && parsed[4] === "MiniGame") {
+                console.log('✅ Session initialized');
+                this.sessionId = parsed[3];
+                console.log(`📋 Session ID: ${this.sessionId}`);
+            }
+            
+            // Xử lý response type 7 - Plugin response
+            else if (parsed[0] === 7) {
+                const pluginName = parsed[2];
+                console.log(`🔄 Plugin ${pluginName} response received`);
+            }
+            
+            // Xử lý heartbeat/ping response
+            else if (parsed[0] === 0) {
+                console.log('❤️  Heartbeat received');
+            }
+            
+        } catch (e) {
+            console.log('📥 Raw message:', data.toString());
+            console.error('❌ Parse error:', e.message);
+        }
+    }
+
+    getLatestTxSession() {
+        if (!this.latestTxData || !this.latestTxData.htr || this.latestTxData.htr.length === 0) {
+            return { error: "Không có dữ liệu bàn TX", message: "Chưa nhận được dữ liệu từ server hoặc dữ liệu trống" };
+        }
+        try {
+            const latestSession = this.latestTxData.htr.reduce((prev, current) => (current.sid > prev.sid) ? current : prev);
+            const tong = latestSession.d1 + latestSession.d2 + latestSession.d3;
+            const ket_qua = (tong >= 11) ? "tài" : "xỉu";
+            return {
+                phien: latestSession.sid,
+                xuc_xac_1: latestSession.d1,
+                xuc_xac_2: latestSession.d2,
+                xuc_xac_3: latestSession.d3,
+                tong: tong,
+                ket_qua: ket_qua,
+                timestamp: new Date().toISOString(),
+                ban: "tai_xiu",
+                last_updated: this.lastUpdateTime.tx ? this.lastUpdateTime.tx.toISOString() : null
+            };
+        } catch (error) {
+            return { error: "Lỗi xử lý dữ liệu TX", message: error.message };
+        }
+    }
+
+    getLatestMd5Session() {
+        if (!this.latestMd5Data || !this.latestMd5Data.htr || this.latestMd5Data.htr.length === 0) {
+            return { error: "Không có dữ liệu bàn MD5", message: "Chưa nhận được dữ liệu từ server hoặc dữ liệu trống" };
+        }
+        try {
+            const latestSession = this.latestMd5Data.htr.reduce((prev, current) => (current.sid > prev.sid) ? current : prev);
+            const tong = latestSession.d1 + latestSession.d2 + latestSession.d3;
+            const ket_qua = (tong >= 11) ? "tài" : "xỉu";
+            return {
+                phien: latestSession.sid,
+                xuc_xac_1: latestSession.d1,
+                xuc_xac_2: latestSession.d2,
+                xuc_xac_3: latestSession.d3,
+                tong: tong,
+                ket_qua: ket_qua,
+                timestamp: new Date().toISOString(),
+                ban: "md5",
+                last_updated: this.lastUpdateTime.md5 ? this.lastUpdateTime.md5.toISOString() : null
+            };
+        } catch (error) {
+            return { error: "Lỗi xử lý dữ liệu MD5", message: error.message };
+        }
+    }
+
+    handleReconnect() {
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++;
+            const delay = this.reconnectDelay * this.reconnectAttempts;
+            console.log(`🔄 Attempting to reconnect in ${delay}ms (Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+            setTimeout(() => {
+                console.log('🔄 Reconnecting...');
+                this.connect();
+            }, delay);
+        } else {
+            console.log('❌ Max reconnection attempts reached');
+        }
+    }
+
+    startHeartbeat() {
+        setInterval(() => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                const heartbeatMsg = [0, this.sessionId || ""];
+                this.sendRaw(heartbeatMsg);
+                console.log('❤️  Sending heartbeat...');
+            }
+        }, 25000);
+    }
+
+    close() {
+        if (this.ws) {
+            this.ws.close();
+        }
+    }
 }
 
-app.get('/api/ditmemaysun', (req, res) => {
-    res.json(apiResponseData);
+// KHỞI TẠO EXPRESS SERVER
+const app = express();
+const PORT = 3004;
+app.use(cors());
+app.use(express.json());
+
+// Tạo WebSocket client với URL mới
+const client = new GameWebSocketClient(
+    'wss://api.khuatuish.vip/websocket?d=Ykdoa2FXeGtadz09fDI2fDE3NjY1NTY2NDczMzZ8MGE5OGQ2OTE2ZjRhOWQ1NDhjYjcyNWUwOWQ3ZTU4NmJ8ZDI5MzI3MTNhZDhkZjQ0YTdkODUyYTVmNjFlNmQzNGY='
+);
+client.connect();
+
+// Routes API
+app.get('/api/tx', (req, res) => {
+    const data = client.getLatestTxSession();
+    if (data.error) return res.status(404).json(data);
+    res.json(data);
+});
+
+app.get('/api/md5', (req, res) => {
+    const data = client.getLatestMd5Session();
+    if (data.error) return res.status(404).json(data);
+    res.json(data);
+});
+
+app.get('/api/all', (req, res) => {
+    const txSession = client.getLatestTxSession();
+    const md5Session = client.getLatestMd5Session();
+    res.json({
+        tai_xiu: txSession.error ? { error: txSession.error } : txSession,
+        md5: md5Session.error ? { error: md5Session.error } : md5Session,
+        timestamp: new Date().toISOString()
+    });
+});
+
+app.get('/api/status', (req, res) => {
+    const hasTxData = client.latestTxData && client.latestTxData.htr && client.latestTxData.htr.length > 0;
+    const hasMd5Data = client.latestMd5Data && client.latestMd5Data.htr && client.latestMd5Data.htr.length > 0;
+    res.json({
+        status: "running",
+        websocket_connected: client.ws ? client.ws.readyState === WebSocket.OPEN : false,
+        authenticated: client.isAuthenticated,
+        has_tx_data: hasTxData,
+        has_md5_data: hasMd5Data,
+        tx_last_updated: client.lastUpdateTime.tx ? client.lastUpdateTime.tx.toISOString() : null,
+        md5_last_updated: client.lastUpdateTime.md5 ? client.lastUpdateTime.md5.toISOString() : null,
+        timestamp: new Date().toISOString()
+    });
+});
+
+app.get('/api/refresh', (req, res) => {
+    if (client.isAuthenticated && client.ws && client.ws.readyState === WebSocket.OPEN) {
+        client.refreshGameData();
+        res.json({ message: "Đã gửi yêu cầu refresh dữ liệu", timestamp: new Date().toISOString() });
+    } else {
+        res.status(400).json({ error: "Không thể refresh", message: "WebSocket chưa kết nối hoặc chưa xác thực" });
+    }
 });
 
 app.get('/', (req, res) => {
-    res.json(apiResponseData);
+    res.send(`
+        <html>
+            <head><title>API Status</title></head>
+            <body><h1>API is running</h1><p>Use endpoints: /api/tx, /api/md5, /api/all, /api/status</p></body>
+        </html>
+    `);
 });
 
-app.listen(PORT, () => {
-    console.log(`[🌐] Server is running at http://localhost:${PORT}`);
-    connectWebSocket();
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server đang chạy tại: http://localhost:${PORT}`);
 });
+
+setTimeout(() => {
+    client.startHeartbeat();
+}, 10000);
+
+process.on('SIGINT', () => {
+    console.log('\n👋 Closing WebSocket connection and server...');
+    client.close();
+    process.exit();
+});
+
+module.exports = { GameWebSocketClient, app };
