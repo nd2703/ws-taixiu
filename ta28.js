@@ -22,20 +22,22 @@ class GameWebSocketClient {
     connect() {
         console.log('🔗 Connecting to WebSocket server...');
         
-        this.ws = new WebSocket(this.url, {
-            headers: {
-                'Host': 'xkhsa.apita228.net',
-                'Origin': 'https://play.ta28.you',
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
-                'Pragma': 'no-cache',
-                'Cache-Control': 'no-cache',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Accept-Language': 'vi-VN,vi;q=0.9,fr-FR;q=0.8,fr;q=0.7,en-US;q=0.6,en;q=0.5',
-                'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits',
-                'Sec-WebSocket-Version': '13'
-            }
-        });
-
+       this.ws = new WebSocket(this.url, {
+    headers: {
+        'Host': 'api.apita228.net',
+        'Origin': 'https://play.ta28.media',
+        'Referer': 'https://play.ta28.media/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+        'Pragma': 'no-cache',
+        'Cache-Control': 'no-cache',
+        'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8',
+        'Connection': 'Upgrade',
+        'Upgrade': 'websocket',
+        'Sec-WebSocket-Version': '13',
+        'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits'
+    }
+});
         this.setupEventHandlers();
     }
 
@@ -293,7 +295,7 @@ class GameWebSocketClient {
 
 // KHỞI TẠO EXPRESS SERVER
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
