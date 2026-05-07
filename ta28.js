@@ -299,7 +299,7 @@ app.use(express.json());
 
 // Tạo WebSocket client - URL giữ nguyên
 const client = new GameWebSocketClient(
-    'wss://xkhsa.apita228.net/websocket?d=YjJ4aWNHZGlhMjg9fDIyM3wxNzY2NDcyMDY5NzA2fGM1YzhkZGEyNGRkYjY1YWRmZDFjY2Y2OTM1MjkxNTFlfDJlODc2ZDk4NWViYWJhZmY0NTVmOWU0ZmY1NWI3YTQ4'
+    'wss://api.apita228.net/websocket?d=Y0dsa2JXdGthbWs9fC00fDE3NzgxMzY2OTIyODJ8MDZlOWFlOWQwNTk5MWE3YTIzMzJlMGVmYjA3YjdjMmR8YTJhYzExNTYyYjI5YzdlNzkwYThhNDA0ZTM0YWUzNGN8MjVDQ0YzREQ='
 );
 client.connect();
 
