@@ -25,8 +25,8 @@ class GameWebSocketClient {
        this.ws = new WebSocket(this.url, {
     headers: {
         'Host': 'api.apita228.net',
-        'Origin': 'https://play.ta28.media',
-        'Referer': 'https://play.ta28.media/',
+        'Origin': 'https://play.ta28.chat/',
+        'Referer': 'https://play.ta28.chat/',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
         'Pragma': 'no-cache',
         'Cache-Control': 'no-cache',
