@@ -6,17 +6,17 @@ const { Server } = require('socket.io');
 
 // ============ CẤU HÌNH ============
 const WSS_URL = 'wss://koay56bcni5e0mk.cq.qnwxdhwica.com/';
-const HTTP_PORT = 5500;
+const HTTP_PORT = process.env.PORT || 5550;   // ← SỬA: dùng PORT của Render
 const MAX_HISTORY = 50;
 
-// Heartbeat — giảm xuống 10s để giữ NAT
+// Heartbeat
 const PING_INTERVAL_MS = 10000;
 const TCP_KEEPALIVE_MS = 30000;
 
-// Watchdog: 3 phút không có message nào từ server → chết → reconnect
+// Watchdog
 const WATCHDOG_TIMEOUT_MS = 3 * 60 * 1000;
 
-// Re-login định kỳ mỗi 45 phút (đề phòng token hết hạn)
+// Re-login định kỳ
 const RELOGIN_INTERVAL_MS = 45 * 60 * 1000;
 
 // Reconnect
@@ -26,7 +26,12 @@ const STABLE_CONNECTION_MS = 30000;
 const MAX_CONSECUTIVE_FAILURES = 10;
 const FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 
-// Debug: bật để log tất cả message
+// Supervisor
+const SUPERVISOR_INTERVAL_MS  = 15000;
+const STALE_OPEN_TIMEOUT_MS   = 60000;
+const RECONNECT_JITTER_MS     = 3000;
+const HARD_RESTART_AFTER_FAIL = 20;
+
 const DEBUG_ALL_MESSAGES = false;
 
 // ============ HTTP + SOCKET.IO ============
@@ -190,6 +195,7 @@ app.get('/api/status', (req, res) => {
     lastMessageAgoSec: lastMessageAt ? Math.floor((now - lastMessageAt) / 1000) : null,
     lastLoginAt,
     cooldownUntil: cooldownUntil > now ? new Date(cooldownUntil).toISOString() : null,
+    supervisorAlive: !!supervisorInterval,
     uptimeSec: Math.floor((now - processStartTime) / 1000),
     stats: {
       md5: { stored: sessions.md5.length, pending: !!pending.md5 },
@@ -376,12 +382,13 @@ io.on('connection', (socket) => {
 
 server.listen(HTTP_PORT, '0.0.0.0', () => {
   console.log('🌐 Web + API đang chạy:');
-  console.log(`   - Web:        http://161.248.4.235:${HTTP_PORT}`);
-  console.log(`   - API MD5:    http://161.248.4.235:${HTTP_PORT}/api/md5`);
-  console.log(`   - API TX:     http://161.248.4.235:${HTTP_PORT}/api/tx`);
-  console.log(`   - API ALL:    http://161.248.4.235:${HTTP_PORT}/api/all`);
-  console.log(`   - API SIGNAL: http://161.248.4.235:${HTTP_PORT}/api/signal`);
-  console.log(`   - API STATUS: http://161.248.4.235:${HTTP_PORT}/api/status`);
+  console.log(`   - Cổng:       ${HTTP_PORT}`);
+  console.log(`   - Web:        http://localhost:${HTTP_PORT}`);
+  console.log(`   - API MD5:    http://localhost:${HTTP_PORT}/api/md5`);
+  console.log(`   - API TX:     http://localhost:${HTTP_PORT}/api/tx`);
+  console.log(`   - API ALL:    http://localhost:${HTTP_PORT}/api/all`);
+  console.log(`   - API SIGNAL: http://localhost:${HTTP_PORT}/api/signal`);
+  console.log(`   - API STATUS: http://localhost:${HTTP_PORT}/api/status`);
 });
 
 // ============ PUSH ============
@@ -417,6 +424,7 @@ let currentTxMatchId = '???';
 let pingInterval = null;
 let watchdogInterval = null;
 let reloginInterval = null;
+let supervisorInterval = null;
 let isAlive = false;
 let reconnectAttempts = 0;
 let consecutiveFailures = 0;
@@ -548,6 +556,60 @@ function cleanupTimers() {
   stopHeartbeat();
   stopWatchdog();
   stopRelogin();
+}
+
+// ============ SUPERVISOR ============
+function startSupervisor() {
+  stopSupervisor();
+  supervisorInterval = setInterval(() => {
+    const now = Date.now();
+
+    if ((!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING)
+        && !reconnectTimer) {
+      console.log('👁️  Supervisor: socket chết không có timer → reconnect');
+      forceReconnect('supervisor-dead');
+      return;
+    }
+
+    if (ws && ws.readyState === WebSocket.OPEN && lastMessageAt) {
+      const idle = now - lastMessageAt;
+      if (idle > STALE_OPEN_TIMEOUT_MS) {
+        console.log(`👁️  Supervisor: OPEN nhưng idle ${Math.floor(idle/1000)}s → terminate`);
+        forceReconnect('stale-open');
+        return;
+      }
+    }
+
+    if (consecutiveFailures >= HARD_RESTART_AFTER_FAIL) {
+      console.log('👁️  Supervisor: quá nhiều fail → hard reset');
+      cooldownUntil = 0;
+      forceReconnect('hard-reset');
+      return;
+    }
+  }, SUPERVISOR_INTERVAL_MS);
+}
+
+function stopSupervisor() {
+  if (supervisorInterval) { clearInterval(supervisorInterval); supervisorInterval = null; }
+}
+
+// ============ FORCE RECONNECT ============
+function forceReconnect(reason) {
+  console.log(`🔧 forceReconnect: ${reason}`);
+  cleanupTimers();
+  try {
+    if (ws) {
+      ws.removeAllListeners();
+      try { ws.terminate(); } catch (e) {}
+      ws = null;
+    }
+  } catch (e) {}
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (reason === 'hard-reset') {
+    reconnectAttempts = 0;
+    consecutiveFailures = 0;
+  }
+  scheduleReconnect();
 }
 
 // ============ XỬ LÝ MESSAGE ============
@@ -700,6 +762,8 @@ function connect() {
   sessionSeq++;
   const thisSession = sessionSeq;
 
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+
   console.log(`\n🔌 [Session ${thisSession}] Đang kết nối tới ${WSS_URL}...`);
   lastConnectedAt = null;
   lastMessageAt = null;
@@ -722,11 +786,9 @@ function connect() {
     lastMessageAt = openedAt.t;
     isAlive = true;
 
-    // Bật TCP keepalive (30s) để giữ NAT/firewall không drop
     try {
       if (ws._socket && typeof ws._socket.setKeepAlive === 'function') {
         ws._socket.setKeepAlive(true, TCP_KEEPALIVE_MS);
-        // Giảm timeout TCP_USER_TIMEOUT (Linux) — không có trên Windows
         if (typeof ws._socket.setNoDelay === 'function') ws._socket.setNoDelay(true);
         console.log(`🔧 Đã bật TCP keepalive ${TCP_KEEPALIVE_MS/1000}s`);
       }
@@ -737,6 +799,24 @@ function connect() {
     startWatchdog();
   });
 
+  // ✅ SỬA: in chi tiết khi bị từ chối bắt tay (403…)
+  ws.on('unexpected-response', (req, res) => {
+    if (thisSession !== sessionSeq) return;
+    console.error(`\n❌ [Session ${thisSession}] Bắt tay bị từ chối`);
+    console.error(`   HTTP status: ${res.statusCode} ${res.statusMessage || ''}`);
+    console.error(`   Headers:`, JSON.stringify(res.headers, null, 2));
+    let body = '';
+    res.on('data', chunk => {
+      body += chunk.toString();
+      if (body.length < 2000) {
+        console.error('   Body chunk:', chunk.toString().slice(0, 500));
+      }
+    });
+    res.on('end', () => {
+      if (body) console.error('   Full body (đầu 1000 ký tự):', body.slice(0, 1000));
+    });
+  });
+
   ws.on('pong', () => {
     if (thisSession !== sessionSeq) return;
     isAlive = true;
@@ -744,7 +824,11 @@ function connect() {
 
   ws.on('message', (data) => {
     if (thisSession !== sessionSeq) return;
-    handleMessage(data, thisSession);
+    try {
+      handleMessage(data, thisSession);
+    } catch (e) {
+      console.error('💥 handleMessage lỗi:', e.message);
+    }
   });
 
   ws.on('close', function close(code, reason) {
@@ -770,21 +854,26 @@ function connect() {
   ws.on('error', function error(err) {
     if (thisSession !== sessionSeq) return;
     console.error(`❌ [Session ${thisSession}] Lỗi WebSocket: ${err.message}`);
+    try {
+      if (this.readyState !== WebSocket.CLOSED) this.terminate();
+    } catch (e) {}
   });
 }
 
+// ============ SCHEDULE RECONNECT ============
 function scheduleReconnect() {
   if (reconnectTimer) return;
+
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+    return;
+  }
 
   const now = Date.now();
 
   if (cooldownUntil > now) {
     const waitMs = cooldownUntil - now;
     console.log(`⏸️  Đang trong thời gian nghỉ, còn ${Math.ceil(waitMs/1000)}s...`);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, waitMs);
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, waitMs);
     return;
   }
 
@@ -792,14 +881,14 @@ function scheduleReconnect() {
     cooldownUntil = now + FAILURE_COOLDOWN_MS;
     consecutiveFailures = 0;
     console.log(`🛑 Thất bại ${MAX_CONSECUTIVE_FAILURES} lần liên tiếp. Nghỉ ${FAILURE_COOLDOWN_MS/60000} phút.`);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, FAILURE_COOLDOWN_MS);
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, FAILURE_COOLDOWN_MS);
     return;
   }
 
-  const delay = Math.min(RECONNECT_MIN_MS * Math.pow(2, reconnectAttempts), RECONNECT_MAX_MS);
+  const base   = Math.min(RECONNECT_MIN_MS * Math.pow(2, reconnectAttempts), RECONNECT_MAX_MS);
+  const jitter = Math.floor(Math.random() * RECONNECT_JITTER_MS);
+  const delay  = base + jitter;
+
   reconnectAttempts++;
   totalReconnects++;
 
@@ -812,9 +901,11 @@ function scheduleReconnect() {
 }
 
 // ============ START ============
+startSupervisor();
 connect();
 
-// Log trạng thái mỗi 5 phút
+setInterval(() => { if (!supervisorInterval) startSupervisor(); }, 60000);
+
 setInterval(() => {
   const state = ws ? ['CONNECTING','OPEN','CLOSING','CLOSED'][ws.readyState] : 'NULL';
   const upMin = Math.floor((Date.now() - processStartTime) / 60000);
@@ -824,7 +915,11 @@ setInterval(() => {
 
 process.on('uncaughtException', (err) => {
   console.error('💥 uncaughtException:', err.message);
+  try {
+    if (ws && ws.readyState === WebSocket.OPEN) forceReconnect('uncaught');
+  } catch (e) {}
 });
+
 process.on('unhandledRejection', (err) => {
   console.error('💥 unhandledRejection:', err && err.message ? err.message : err);
 });
